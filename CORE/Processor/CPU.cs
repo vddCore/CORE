@@ -75,9 +75,9 @@ namespace CORE.Processor
         private void SaveUIntToMemory(uint addr, uint value)
         {
             Memory[addr + 0] = (byte)(value & 0x000000FF);
-            Memory[addr + 1] = (byte)(value & 0x0000FF00);
-            Memory[addr + 2] = (byte)(value & 0x00FF0000);
-            Memory[addr + 3] = (byte)(value & 0xFF000000);
+            Memory[addr + 1] = (byte)((value & 0x0000FF00) >> 8);
+            Memory[addr + 2] = (byte)((value & 0x00FF0000) >> 16);
+            Memory[addr + 3] = (byte)((value & 0xFF000000) >> 24);
         }
 
         private Instruction Fetch()
