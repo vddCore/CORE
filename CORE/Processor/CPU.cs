@@ -53,7 +53,7 @@ namespace CORE.Processor
 
         private ushort GetUShortFromMemory()
         {
-            ushort ret = (ushort)(Memory[I++]);
+            var ret = (ushort)(Memory[I++]);
             ret |= (ushort)(Memory[I++] << 8);
 
             return ret;
@@ -237,7 +237,7 @@ namespace CORE.Processor
 
                 case StackOpCode.PushW:
                     if (sourceOperandValue > ushort.MaxValue) throw new Exception("Operand size mismatch. Wanted word.");
-                    PushShort((ushort)sourceOperandValue);
+                    PushUShort((ushort)sourceOperandValue);
                     break;
 
                 case StackOpCode.PushD:
@@ -260,7 +260,7 @@ namespace CORE.Processor
             Memory[S--] = value;
         }
 
-        private void PushShort(ushort value)
+        private void PushUShort(ushort value)
         {
             Memory[S--] = (byte)(value & 0x00FF);
             Memory[S--] = (byte)((value & 0xFF00) >> 8);
@@ -272,6 +272,47 @@ namespace CORE.Processor
             Memory[S--] = (byte)((value & 0x0000FF00) >> 8);
             Memory[S--] = (byte)((value & 0x00FF0000) >> 16);
             Memory[S--] = (byte)((value & 0xFF000000) >> 24);
+        }
+
+        private void PopByte(Instruction instruction, OperandSize size)
+        {
+            if (instruction.OperandFlags.HasFlag(OperandFlags.SourceIsPointer))
+                throw new Exception("Cannot pop from stack to pointer.");
+
+            var value = 0;
+            switch (size)
+            {
+                case OperandSize.Byte:
+                    value = Memory[S++];
+                    break;
+                case OperandSize.Word:
+                    value = (ushort)Memory[S--];
+                    value |= (ushort)(Memory[S--] << 8);
+                    break;
+                case OperandSize.Dword:
+                    value = (ushort)Memory[S--];
+                    value |= (ushort)(Memory[S--] << 8);
+                    value |= (ushort)(Memory[S--] << 16);
+                    value |= (ushort)(Memory[S--] << 24);
+                    break;
+            }
+
+            switch (instruction.Source)
+            {
+                case OperationTarget.A: A = value; break;
+                case OperationTarget.B: B = value; break;
+                case OperationTarget.C: C = value; break;
+                case OperationTarget.D: D = value; break;
+                case OperationTarget.T: T = value; break;
+                case OperationTarget.X: X = value; break;
+
+                case OperationTarget.Constant:
+                case OperationTarget.S:
+                    throw new Exception("Cannot pop from stack into stack pointer or constant.");
+
+                default:
+                    throw new Exception($"Unknown source operand {instruction.Source}.");
+            }
         }
 
         private int GetOperandValue(Instruction instruction, bool destinationOperand)
@@ -348,6 +389,12 @@ namespace CORE.Processor
                 I += (uint)offset;
             else
                 I -= (uint)Math.Abs(offset);
+        }
+
+        private void CallAddress(uint address)
+        {
+            PushUInt(I);
+            JumpToAddress(address);
         }
     }
 }
