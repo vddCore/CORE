@@ -3,7 +3,7 @@
     public enum OpCode
     {
         Mov = 0x00, // Move
-        Ari = 0x01, // Arithmetic [ADD MUL SUB DIV]
+        Ari = 0x01, // Arithmetic [ADD MUL SUB DIV ROR ROL SHR SHL]
         Tst = 0x02, // Test [>= <= == < > !=]
         Flo = 0x03, // Flow Control [JMP TJMP FJMP CALL RET INT IRET]
         Prt = 0x04, // Port operation [IN OUT]
