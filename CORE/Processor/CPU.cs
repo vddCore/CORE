@@ -1,31 +1,29 @@
 ﻿using CORE.Processor.Executive;
 using CORE.Processor.InstructionData;
 using System;
-using System.Collections.Generic;
 
 namespace CORE.Processor
 {
     public class CPU
     {
-        public int A { get; set; }
-        public int B { get; set; }
-        public int C { get; set; }
-        public int D { get; set; }
+        public uint A { get; set; }
+        public uint B { get; set; }
+        public uint C { get; set; }
+        public uint D { get; set; }
 
-        public int F { get; set; }
-
-        public int S { get; set; }
-        public int T { get; set; }
-        public int X { get; set; }
+        public uint S { get; set; }
+        public uint T { get; set; }
+        public uint X { get; set; }
 
         public uint I { get; private set; }
         public byte[] Memory { get; set; }
 
-        public Dictionary<byte, uint> InterruptVectors { get; private set; }
+        public uint[] InterruptVectors { get; }
 
         public CPU()
         {
             Memory = new byte[1024 * 16384];
+            InterruptVectors = new uint[255];
         }
 
         public void Reset()
@@ -45,51 +43,84 @@ namespace CORE.Processor
         public void LoadImage(byte[] image)
         {
             I = 0;
+
             foreach (byte b in image)
                 Memory[I++] = b;
 
             Reset();
         }
 
-        private ushort GetUShortFromMemory()
+        private uint ReadValueAtInstructionPointer(OperandSize operandSize, bool increment = true)
         {
-            var ret = (ushort)(Memory[I++]);
-            ret |= (ushort)(Memory[I++] << 8);
+            var value = ReadValueFromMemory(I, operandSize);
 
+            if (increment)
+            {
+                switch (operandSize)
+                {
+                    case OperandSize.Byte: I += 1; break;
+                    case OperandSize.Word: I += 2; break;
+                    case OperandSize.Dword: I += 4; break;
+                }
+            }
+            return value;
+        }
+
+        private uint ReadValueFromMemory(uint address, OperandSize operandSize)
+        {
+            uint ret = 0;
+            switch (operandSize)
+            {
+                case OperandSize.Byte:
+                    ret = Memory[address];
+                    break;
+                case OperandSize.Word:
+                    ret = Memory[address + 0];
+                    ret |= (ushort)(Memory[address + 1] << 8);
+                    break;
+                case OperandSize.Dword:
+                    ret = Memory[address];
+                    ret |= (uint)(Memory[address + 1] << 8);
+                    ret |= (uint)(Memory[address + 2] << 16);
+                    ret |= (uint)(Memory[address + 3] << 24);
+                    break;
+
+                default: throw new Exception("Invalid operand size.");
+            }
             return ret;
         }
 
-        private uint GetUIntFromMemory()
+        private void SaveValueToMemory(uint address, uint value, OperandSize operandSize)
         {
-            uint ret = (uint)(Memory[I++]);
-            ret |= (uint)(Memory[I++] << 8);
-            ret |= (uint)(Memory[I++] << 16);
-            ret |= (uint)(Memory[I++] << 24);
+            switch (operandSize)
+            {
+                case OperandSize.Byte:
+                    if (value > byte.MaxValue) throw new Exception("Operand size mismatch. Wanted at most a byte.");
 
-            return ret;
-        }
+                    Memory[address] = (byte)value;
+                    break;
 
-        private uint GetUIntFromMemory(uint pointer)
-        {
-            uint ret = (uint)(Memory[pointer]);
-            ret |= (uint)(Memory[pointer + 1] << 8);
-            ret |= (uint)(Memory[pointer + 2] << 16);
-            ret |= (uint)(Memory[pointer + 3] << 24);
+                case OperandSize.Word:
+                    if (value > short.MaxValue) throw new Exception("Operand size mismatch. Wanted at most a word.");
 
-            return ret;
-        }
+                    Memory[address] = (byte)(value & 0x00FF);
+                    Memory[address + 1] = (byte)(value & 0xFF00 >> 8);
+                    break;
 
-        private void SaveUIntToMemory(uint addr, uint value)
-        {
-            Memory[addr + 0] = (byte)(value & 0x000000FF);
-            Memory[addr + 1] = (byte)((value & 0x0000FF00) >> 8);
-            Memory[addr + 2] = (byte)((value & 0x00FF0000) >> 16);
-            Memory[addr + 3] = (byte)((value & 0xFF000000) >> 24);
+                case OperandSize.Dword:
+                    Memory[address] = (byte)(value & 0x000000FF);
+                    Memory[address + 1] = (byte)((value & 0x0000FF00) >> 8);
+                    Memory[address + 2] = (byte)((value & 0x00FF0000) >> 16);
+                    Memory[address + 3] = (byte)((value & 0xFF000000) >> 24);
+                    break;
+
+                default: throw new Exception("Invalid operand size.");
+            }
         }
 
         private Instruction Fetch()
         {
-            return Instruction.Decode(GetUShortFromMemory());
+            return Instruction.Decode((ushort)ReadValueAtInstructionPointer(OperandSize.Word));
         }
 
         private void Execute(Instruction instruction)
@@ -123,49 +154,49 @@ namespace CORE.Processor
                     if (!instruction.OperandFlags.HasFlag(OperandFlags.DestinationIsPointer))
                         throw new Exception("Invalid destination operand: Constant.");
 
-                    var addr = GetUIntFromMemory();
-                    SaveUIntToMemory(addr, (uint)sourceValue);
+                    var addr = ReadValueAtInstructionPointer(instruction.OperandSize);
+                    SaveValueToMemory(addr, sourceValue, instruction.OperandSize);
                     break;
 
                 case OperationTarget.A:
                     if (instruction.OperandFlags.HasFlag(OperandFlags.DestinationIsPointer))
-                        SaveUIntToMemory((uint)A, (uint)sourceValue);
+                        SaveValueToMemory(A, sourceValue, instruction.OperandSize);
                     else A = sourceValue;
                     break;
 
                 case OperationTarget.B:
                     if (instruction.OperandFlags.HasFlag(OperandFlags.DestinationIsPointer))
-                        SaveUIntToMemory((uint)B, (uint)sourceValue);
+                        SaveValueToMemory(B, sourceValue, instruction.OperandSize);
                     else B = sourceValue;
                     break;
 
                 case OperationTarget.C:
                     if (instruction.OperandFlags.HasFlag(OperandFlags.DestinationIsPointer))
-                        SaveUIntToMemory((uint)C, (uint)sourceValue);
+                        SaveValueToMemory(C, sourceValue, instruction.OperandSize);
                     else C = sourceValue;
                     break;
 
                 case OperationTarget.D:
                     if (instruction.OperandFlags.HasFlag(OperandFlags.DestinationIsPointer))
-                        SaveUIntToMemory((uint)D, (uint)sourceValue);
+                        SaveValueToMemory(D, sourceValue, instruction.OperandSize);
                     else D = sourceValue;
                     break;
 
                 case OperationTarget.S:
                     if (instruction.OperandFlags.HasFlag(OperandFlags.DestinationIsPointer))
-                        SaveUIntToMemory((uint)S, (uint)sourceValue);
+                        SaveValueToMemory(S, sourceValue, instruction.OperandSize);
                     else S = sourceValue;
                     break;
 
                 case OperationTarget.T:
                     if (instruction.OperandFlags.HasFlag(OperandFlags.DestinationIsPointer))
-                        SaveUIntToMemory((uint)T, (uint)sourceValue);
+                        SaveValueToMemory(T, sourceValue, instruction.OperandSize);
                     else T = sourceValue;
                     break;
 
                 case OperationTarget.X:
                     if (instruction.OperandFlags.HasFlag(OperandFlags.DestinationIsPointer))
-                        SaveUIntToMemory((uint)X, (uint)sourceValue);
+                        SaveValueToMemory(X, sourceValue, instruction.OperandSize);
                     else X = sourceValue;
                     break;
 
@@ -192,10 +223,8 @@ namespace CORE.Processor
                 case ArithmeticOpCode.Mod:
                     T = a % b;
                     break;
-                case ArithmeticOpCode.Ror: T = (a >> b) | (a << (-b)); break;
-                case ArithmeticOpCode.Rol: T = (a << b) | (a >> (-b)); break;
-                case ArithmeticOpCode.Shr: T = (a >> b); break;
-                case ArithmeticOpCode.Shl: T = (a << b); break;
+                case ArithmeticOpCode.Shr: T = (a >> (int)b); break;
+                case ArithmeticOpCode.Shl: T = (a << (int)b); break;
 
                 default: throw new Exception($"Unknown arithmetic opcode: {arithmeticOpCode}.");
             }
@@ -209,166 +238,177 @@ namespace CORE.Processor
             switch (flowControlOpCode)
             {
                 case FlowControlOpCode.Jmp:
-                    JumpToAddress((uint)sourceOperandValue);
+                    JumpToAddress(sourceOperandValue);
                     break;
                 case FlowControlOpCode.Fjmp:
-                    if (T == 0) JumpToAddress((uint)sourceOperandValue);
+                    if (T == 0) JumpToAddress(sourceOperandValue);
                     break;
                 case FlowControlOpCode.Tjmp:
-                    if (T != 0) JumpToAddress((uint)sourceOperandValue);
+                    if (T != 0) JumpToAddress(sourceOperandValue);
                     break;
                 case FlowControlOpCode.Rjmp:
-                    JumpRelative(sourceOperandValue);
+                    JumpRelative((int)sourceOperandValue);
                     break;
-                // todo call, ret, iret, int
+                case FlowControlOpCode.Call:
+                    CallAddress(sourceOperandValue);
+                    break;
+                case FlowControlOpCode.Int:
+                    CallInterrupt(sourceOperandValue);
+                    break;
+                case FlowControlOpCode.Ret:
+                    ReturnFromCall();
+                    break;
+                case FlowControlOpCode.Iret:
+                    ReturnFromInterrupt();
+                    break;
             }
         }
 
         private void DoStackOperation(Instruction instruction)
         {
             var stackOpCode = (StackOpCode)instruction.Data;
-            var sourceOperandValue = GetOperandValue(instruction, false);
 
-            switch(stackOpCode)
+            switch (stackOpCode)
             {
                 case StackOpCode.Push:
+                    var sourceOperandValue = GetOperandValue(instruction, false);
+
                     if (sourceOperandValue > byte.MaxValue) throw new Exception("Operand size mismatch. Wanted byte.");
-                    break;
-
-                case StackOpCode.PushW:
-                    if (sourceOperandValue > ushort.MaxValue) throw new Exception("Operand size mismatch. Wanted word.");
-                    PushUShort((ushort)sourceOperandValue);
-                    break;
-
-                case StackOpCode.PushD:
-                    PushUInt((uint)sourceOperandValue);
+                    PushValue(sourceOperandValue, instruction.OperandSize);
                     break;
 
                 case StackOpCode.Pop:
-                    break;
+                    if (instruction.OperandFlags.HasFlag(OperandFlags.SourceIsPointer))
+                        throw new Exception("Cannot pop from stack to pointer.");
 
-                case StackOpCode.PopW:
-                    break;
+                    var value = PopValue(instruction.OperandSize);
+                    switch (instruction.Destination)
+                    {
+                        case OperationTarget.A: A = value; break;
+                        case OperationTarget.B: B = value; break;
+                        case OperationTarget.C: C = value; break;
+                        case OperationTarget.D: D = value; break;
+                        case OperationTarget.T: T = value; break;
+                        case OperationTarget.X: X = value; break;
 
-                case StackOpCode.PopD:
+                        case OperationTarget.Constant:
+                        case OperationTarget.S:
+                            throw new Exception("Cannot pop from stack into stack pointer or constant, or a memory pointer.");
+
+                        default:
+                            throw new Exception($"Unknown destination operand {instruction.Destination}.");
+                    }
                     break;
             }
         }
 
-        private void PushByte(byte value)
+        private void PushValue(uint value, OperandSize operandSize)
         {
-            Memory[S--] = value;
+            switch (operandSize)
+            {
+                case OperandSize.Byte:
+                    if (value > byte.MaxValue) throw new Exception("Operand size mismatch. Wanted byte.");
+
+                    Memory[S--] = (byte)value;
+                    break;
+
+                case OperandSize.Word:
+                    if (value > ushort.MaxValue) throw new Exception("Operand size mismatch. Wanted word.");
+
+                    Memory[S--] = (byte)(value & 0x00FF);
+                    Memory[S--] = (byte)((value & 0xFF00) >> 8);
+                    break;
+
+                case OperandSize.Dword:
+                    Memory[S--] = (byte)(value & 0x000000FF);
+                    Memory[S--] = (byte)((value & 0x0000FF00) >> 8);
+                    Memory[S--] = (byte)((value & 0x00FF0000) >> 16);
+                    Memory[S--] = (byte)((value & 0xFF000000) >> 24);
+                    break;
+
+                default: throw new Exception("Invalid operand size.");
+            }
         }
 
-        private void PushUShort(ushort value)
+        private uint PopValue(OperandSize operandSize)
         {
-            Memory[S--] = (byte)(value & 0x00FF);
-            Memory[S--] = (byte)((value & 0xFF00) >> 8);
-        }
-
-        private void PushUInt(uint value)
-        {
-            Memory[S--] = (byte)(value & 0x000000FF);
-            Memory[S--] = (byte)((value & 0x0000FF00) >> 8);
-            Memory[S--] = (byte)((value & 0x00FF0000) >> 16);
-            Memory[S--] = (byte)((value & 0xFF000000) >> 24);
-        }
-
-        private void PopByte(Instruction instruction, OperandSize size)
-        {
-            if (instruction.OperandFlags.HasFlag(OperandFlags.SourceIsPointer))
-                throw new Exception("Cannot pop from stack to pointer.");
-
-            var value = 0;
-            switch (size)
+            var value = 0u;
+            switch (operandSize)
             {
                 case OperandSize.Byte:
                     value = Memory[S++];
                     break;
+
                 case OperandSize.Word:
-                    value = (ushort)Memory[S--];
+                    value = Memory[S--];
                     value |= (ushort)(Memory[S--] << 8);
                     break;
+
                 case OperandSize.Dword:
-                    value = (ushort)Memory[S--];
+                    value = Memory[S--];
                     value |= (ushort)(Memory[S--] << 8);
                     value |= (ushort)(Memory[S--] << 16);
                     value |= (ushort)(Memory[S--] << 24);
                     break;
             }
 
-            switch (instruction.Source)
-            {
-                case OperationTarget.A: A = value; break;
-                case OperationTarget.B: B = value; break;
-                case OperationTarget.C: C = value; break;
-                case OperationTarget.D: D = value; break;
-                case OperationTarget.T: T = value; break;
-                case OperationTarget.X: X = value; break;
-
-                case OperationTarget.Constant:
-                case OperationTarget.S:
-                    throw new Exception("Cannot pop from stack into stack pointer or constant.");
-
-                default:
-                    throw new Exception($"Unknown source operand {instruction.Source}.");
-            }
+            return value;
         }
 
-        private int GetOperandValue(Instruction instruction, bool destinationOperand)
+        private uint GetOperandValue(Instruction instruction, bool destinationOperand)
         {
-            var value = 0;
+            var value = 0u;
 
-            var flagToCheck = destinationOperand ? OperandFlags.DestinationIsPointer :
-                                                   OperandFlags.SourceIsPointer;
+            var flagToCheck = destinationOperand ? OperandFlags.DestinationIsPointer
+                                                 : OperandFlags.SourceIsPointer;
 
             switch (destinationOperand ? instruction.Destination : instruction.Source)
             {
                 case OperationTarget.Constant:
                     if (instruction.OperandFlags.HasFlag(flagToCheck))
-                        value = Memory[GetUIntFromMemory()];
-                    else value = (int)GetUIntFromMemory();
+                        value = Memory[ReadValueAtInstructionPointer(instruction.OperandSize)];
+                    else value = ReadValueAtInstructionPointer(instruction.OperandSize);
                     break;
 
                 case OperationTarget.A:
                     if (instruction.OperandFlags.HasFlag(flagToCheck))
-                        value = (int)GetUIntFromMemory((uint)A);
+                        value = ReadValueFromMemory(A, instruction.OperandSize);
                     else value = A;
                     break;
 
                 case OperationTarget.B:
                     if (instruction.OperandFlags.HasFlag(flagToCheck))
-                        value = (int)GetUIntFromMemory((uint)B);
+                        value = ReadValueFromMemory(B, instruction.OperandSize);
                     else value = B;
                     break;
 
                 case OperationTarget.C:
                     if (instruction.OperandFlags.HasFlag(flagToCheck))
-                        value = (int)GetUIntFromMemory((uint)C);
+                        value = ReadValueFromMemory(C, instruction.OperandSize);
                     else value = C;
                     break;
 
                 case OperationTarget.D:
                     if (instruction.OperandFlags.HasFlag(flagToCheck))
-                        value = (int)GetUIntFromMemory((uint)D);
+                        value = ReadValueFromMemory(D, instruction.OperandSize);
                     else value = D;
                     break;
 
                 case OperationTarget.S:
                     if (instruction.OperandFlags.HasFlag(flagToCheck))
-                        value = (int)GetUIntFromMemory((uint)S);
+                        value = ReadValueFromMemory(S, instruction.OperandSize);
                     else value = S;
                     break;
 
                 case OperationTarget.T:
                     if (instruction.OperandFlags.HasFlag(flagToCheck))
-                        value = (int)GetUIntFromMemory((uint)T);
+                        value = ReadValueFromMemory(T, instruction.OperandSize);
                     else value = T;
                     break;
 
                 case OperationTarget.X:
                     if (instruction.OperandFlags.HasFlag(flagToCheck))
-                        value = (int)GetUIntFromMemory((uint)X);
+                        value = ReadValueFromMemory(X, instruction.OperandSize);
                     else value = X;
                     break;
 
@@ -393,8 +433,40 @@ namespace CORE.Processor
 
         private void CallAddress(uint address)
         {
-            PushUInt(I);
+            PushValue(I, OperandSize.Dword);
             JumpToAddress(address);
+        }
+
+        private void ReturnFromCall()
+        {
+            I = PopValue(OperandSize.Dword);
+        }
+
+        private void CallInterrupt(uint address)
+        {
+            PushValue(I, OperandSize.Dword);
+            PushValue(A, OperandSize.Dword);
+            PushValue(B, OperandSize.Dword);
+            PushValue(C, OperandSize.Dword);
+            PushValue(D, OperandSize.Dword);
+            PushValue(S, OperandSize.Dword);
+            PushValue(T, OperandSize.Dword);
+            PushValue(X, OperandSize.Dword);
+
+            JumpToAddress(address);
+        }
+
+        private void ReturnFromInterrupt()
+        {
+            X = PopValue(OperandSize.Dword);
+            T = PopValue(OperandSize.Dword);
+            S = PopValue(OperandSize.Dword);
+            D = PopValue(OperandSize.Dword);
+            C = PopValue(OperandSize.Dword);
+            B = PopValue(OperandSize.Dword);
+            A = PopValue(OperandSize.Dword);
+
+            JumpToAddress(PopValue(OperandSize.Dword));
         }
     }
 }
