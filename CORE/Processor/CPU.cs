@@ -1,4 +1,5 @@
 ﻿using CORE.Processor.Executive;
+using CORE.Processor.Executive.Exceptions;
 using CORE.Processor.InstructionData;
 using System;
 
@@ -18,7 +19,11 @@ namespace CORE.Processor
         public uint I { get; private set; }
         public byte[] Memory { get; set; }
 
+        public bool Halted { get; set; }
+        public bool InterruptsEnabled { get; set; }
         public uint[] InterruptVectors { get; }
+
+        private bool IsInterruptExecuting { get; set; }
 
         public CPU()
         {
@@ -34,6 +39,8 @@ namespace CORE.Processor
 
         public void Step()
         {
+            if (Halted && !IsInterruptExecuting) return;
+
             var insn = Fetch();
             Console.WriteLine(insn.ToString());
 
@@ -48,6 +55,12 @@ namespace CORE.Processor
                 Memory[I++] = b;
 
             Reset();
+        }
+
+        public void ExecuteInterrupt(byte number)
+        {
+            CallInterrupt(InterruptVectors[number]);
+            ReturnFromInterrupt();
         }
 
         private uint ReadValueAtInstructionPointer(OperandSize operandSize, bool increment = true)
@@ -133,11 +146,20 @@ namespace CORE.Processor
                 case OpCode.Ari:
                     DoArithmetic(instruction);
                     break;
+                case OpCode.Tst:
+                    DoTest(instruction);
+                    break;
                 case OpCode.Flo:
                     DoFlowControl(instruction);
                     break;
+                case OpCode.Log:
+                    DoLogic(instruction);
+                    break;
                 case OpCode.Sta:
                     DoStackOperation(instruction);
+                    break;
+                case OpCode.Cpu:
+                    DoCpuStateOperation(instruction);
                     break;
                 default:
                     throw new Exception("Invalid opcode.");
@@ -213,21 +235,69 @@ namespace CORE.Processor
 
             switch (arithmeticOpCode)
             {
-                case ArithmeticOpCode.Add: T = a + b; break;
-                case ArithmeticOpCode.Sub: T = a - b; break;
-                case ArithmeticOpCode.Mul: T = a * b; break;
+                case ArithmeticOpCode.Add: X = a + b; break;
+                case ArithmeticOpCode.Sub: X = a - b; break;
+                case ArithmeticOpCode.Mul: X = a * b; break;
                 case ArithmeticOpCode.Div:
-                    if (b == 0) throw new Exception("Division by zero.");
-                    T = a / b;
+                    if (b == 0)
+                    {
+                        PushValue(I, OperandSize.Dword);
+                        ExecuteInterrupt(0);
+                    }
+                    X = a / b;
                     break;
                 case ArithmeticOpCode.Mod:
-                    T = a % b;
+                    X = a % b;
                     break;
-                case ArithmeticOpCode.Shr: T = (a >> (int)b); break;
-                case ArithmeticOpCode.Shl: T = (a << (int)b); break;
+                case ArithmeticOpCode.Shr: X = (a >> (int)b); break;
+                case ArithmeticOpCode.Shl: X = (a << (int)b); break;
 
-                default: throw new Exception($"Unknown arithmetic opcode: {arithmeticOpCode}.");
+                default:
+                    PushValue((uint)InvalidOpCodeReason.ArithmeticOpCode, OperandSize.Dword);
+                    PushValue(instruction.Data, OperandSize.Dword);
+                    PushValue(I, OperandSize.Dword);
+
+                    ExecuteInterrupt(1);
+                    break;
             }
+        }
+
+        private void DoTest(Instruction instruction)
+        {
+            var testOpCode = (TestOpCode)instruction.Data;
+
+            var a = GetOperandValue(instruction, false);
+            var b = GetOperandValue(instruction, true);
+
+            var result = 0u;
+
+            switch (testOpCode)
+            {
+                case TestOpCode.Equal:
+                    if (a == b) result = 1;
+                    break;
+                case TestOpCode.GreaterThan:
+                    if (a > b) result = 1;
+                    break;
+                case TestOpCode.LesserThan:
+                    if (a < b) result = 1;
+                    break;
+                case TestOpCode.GreaterOrEqual:
+                    if (a >= b) result = 1;
+                    break;
+                case TestOpCode.LesserOrEqual:
+                    if (a <= b) result = 1;
+                    break;
+                default:
+                    PushValue((uint)InvalidOpCodeReason.TestOpCode, OperandSize.Dword);
+                    PushValue(instruction.Data, OperandSize.Dword);
+                    PushValue(I, OperandSize.Dword);
+
+                    ExecuteInterrupt(1);
+                    break;
+            }
+
+            T = result;
         }
 
         private void DoFlowControl(Instruction instruction)
@@ -253,13 +323,52 @@ namespace CORE.Processor
                     CallAddress(sourceOperandValue);
                     break;
                 case FlowControlOpCode.Int:
-                    CallInterrupt(sourceOperandValue);
+                    if (InterruptsEnabled)
+                        ExecuteInterrupt((byte)sourceOperandValue);
                     break;
                 case FlowControlOpCode.Ret:
                     ReturnFromCall();
                     break;
                 case FlowControlOpCode.Iret:
                     ReturnFromInterrupt();
+                    break;
+                default:
+                    PushValue((uint)InvalidOpCodeReason.FlowControlOpCode, OperandSize.Dword);
+                    PushValue(instruction.Data, OperandSize.Dword);
+                    PushValue(I, OperandSize.Dword);
+
+                    ExecuteInterrupt(1);
+                    break;
+            }
+        }
+
+        private void DoLogic(Instruction instruction)
+        {
+            var logicOpCode = (LogicOpCode)instruction.Data;
+
+            var a = GetOperandValue(instruction, false);
+            var b = GetOperandValue(instruction, true);
+
+            switch (logicOpCode)
+            {
+                case LogicOpCode.And:
+                    X = a & b;
+                    break;
+                case LogicOpCode.Or:
+                    X = a | b;
+                    break;
+                case LogicOpCode.Not:
+                    X = ~a;
+                    break;
+                case LogicOpCode.Xor:
+                    X = a ^ b;
+                    break;
+                default:
+                    PushValue((uint)InvalidOpCodeReason.LogicOpCode, OperandSize.Dword);
+                    PushValue(instruction.Data, OperandSize.Dword);
+                    PushValue(I, OperandSize.Dword);
+
+                    ExecuteInterrupt(1);
                     break;
             }
         }
@@ -298,6 +407,47 @@ namespace CORE.Processor
                         default:
                             throw new Exception($"Unknown destination operand {instruction.Destination}.");
                     }
+                    break;
+                default:
+                    PushValue((uint)InvalidOpCodeReason.StackOpCode, OperandSize.Dword);
+                    PushValue(instruction.Data, OperandSize.Dword);
+                    PushValue(I, OperandSize.Dword);
+
+                    ExecuteInterrupt(1);
+                    break;
+            }
+        }
+
+        private void DoCpuStateOperation(Instruction instruction)
+        {
+            var cpuStateOpCode = (CpuStateOpCode)instruction.Data;
+
+            switch (cpuStateOpCode)
+            {
+                case CpuStateOpCode.Rst:
+                    Reset();
+                    break;
+                case CpuStateOpCode.Cli:
+                    InterruptsEnabled = false;
+                    break;
+                case CpuStateOpCode.Sti:
+                    InterruptsEnabled = true;
+                    break;
+                case CpuStateOpCode.SetVe:
+                    var sourceOperandValue = GetOperandValue(instruction, false);
+                    var destinationOperandValue = GetOperandValue(instruction, true);
+
+                    if (sourceOperandValue > 255)
+                        throw new Exception("Interrupt vector index out of bounds.");
+
+                    InterruptVectors[sourceOperandValue] = destinationOperandValue;
+                    break;
+                default:
+                    PushValue((uint)InvalidOpCodeReason.CpuStateOpCode, OperandSize.Dword);
+                    PushValue(instruction.Data, OperandSize.Dword);
+                    PushValue(I, OperandSize.Dword);
+
+                    ExecuteInterrupt(1);
                     break;
             }
         }
@@ -351,7 +501,6 @@ namespace CORE.Processor
                     value |= (ushort)(Memory[S--] << 24);
                     break;
             }
-
             return value;
         }
 
@@ -411,8 +560,6 @@ namespace CORE.Processor
                         value = ReadValueFromMemory(X, instruction.OperandSize);
                     else value = X;
                     break;
-
-                default: throw new Exception($"Unknown operand.");
             }
 
             return value;
@@ -444,6 +591,8 @@ namespace CORE.Processor
 
         private void CallInterrupt(uint address)
         {
+            IsInterruptExecuting = true;
+
             PushValue(I, OperandSize.Dword);
             PushValue(A, OperandSize.Dword);
             PushValue(B, OperandSize.Dword);
@@ -466,7 +615,9 @@ namespace CORE.Processor
             B = PopValue(OperandSize.Dword);
             A = PopValue(OperandSize.Dword);
 
+            // Pop I
             JumpToAddress(PopValue(OperandSize.Dword));
+            IsInterruptExecuting = false;
         }
     }
 }
